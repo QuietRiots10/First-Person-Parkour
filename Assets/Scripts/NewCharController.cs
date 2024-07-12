@@ -11,14 +11,16 @@ public class NewCharController : MonoBehaviour
     [Tooltip("Player's Rigidbody")]
     public Rigidbody PlayerBody;
 
+    //Input and Player States
+    float x, y; //Axis data
+    public bool OnGround, OnWall, Jumping, Sprinting, Crouching; //Player states
+
     //Movement
     private Vector2 InputVector = Vector2.zero;
     [Tooltip("How quickly the player moves (Default = 4500)")]
     public float moveSpeed;
     [Tooltip("Maximum speed of player, factoring in sliding and stuff (Default = 20)")]
     public float maxSpeed;
-    [Tooltip("Whether the player is on the ground")]
-    public bool OnGround;
     [Tooltip("LayerMask for ground objects")]
     public LayerMask WhatIsGround;
 
@@ -43,13 +45,13 @@ public class NewCharController : MonoBehaviour
     [Tooltip("Controls how high the player jumps (Default = 550)")]
     public float JumpForce;
 
-    //Input
-    float x, y; //Axis data
-    bool Jumping, Sprinting, Crouching; //Player states
-
     //Sliding
     private Vector3 normalVector = Vector3.up;
 
+    //Wallrunning
+    public GameObject LastWallTouched; //Contains the last wall touched (MAY CAUSE PROBLEMS IN CORNERS?)
+    public GameObject LastWallJumped; //Contains the last wall jumped off of
+    private bool ReadyToWallJump;
 
     void Start()
     {
@@ -62,6 +64,7 @@ public class NewCharController : MonoBehaviour
     private void FixedUpdate()
     {
         Movement();
+        Deathplane();
     }
    
     //Fetches input data from Unity's Input System
@@ -111,8 +114,8 @@ public class NewCharController : MonoBehaviour
         //Counteract sliding and sloppy movement, slow down the player
         Slowdown(x, y, mag);
 
-        //If holding jump and ready to jump, then jump
-        if (ReadyToJump && Jumping) Jump();
+        //If holding jump then jump
+        if (Jumping) Jump();
 
         //Set max speed
         float maxSpeed = this.maxSpeed;
@@ -137,7 +140,7 @@ public class NewCharController : MonoBehaviour
         if (!OnGround)
         {
             Multiplier = 0.5f;
-            MultiplierForward = 0.5f;
+            MultiplierForward = 1f;
         }
 
         //Movement while sliding
@@ -159,10 +162,7 @@ public class NewCharController : MonoBehaviour
         //Speeds player up when they start a slide
         if (PlayerBody.velocity.magnitude > 0.5f)
         {
-            if (OnGround)
-            {
-                PlayerBody.AddForce(LookDir.transform.forward * SlideForce);
-            }
+            if (OnGround) PlayerBody.AddForce(LookDir.transform.forward * SlideForce);
         }
     }
 
@@ -177,6 +177,7 @@ public class NewCharController : MonoBehaviour
 
     private void Jump()
     {
+        //Grounded Jumps
         if (OnGround && ReadyToJump)
         {
             ReadyToJump = false;
@@ -193,6 +194,24 @@ public class NewCharController : MonoBehaviour
                 PlayerBody.velocity = new Vector3(vel.x, vel.y / 2, vel.z);
 
             Invoke(nameof(ResetJump), JumpCooldown);
+        }
+
+        //Wall jumps
+        else if (OnWall && (LastWallTouched !=  LastWallJumped))
+        {
+            Debug.Log("Wall Jump!");
+            LastWallJumped = LastWallTouched;
+
+            //Add jump forces
+            PlayerBody.AddForce(Vector2.up * JumpForce * 1.8f);
+            PlayerBody.AddForce(normalVector * JumpForce * 0.75f);
+
+            //If jumping while falling, reset y velocity.
+            Vector3 vel = PlayerBody.velocity;
+            if (PlayerBody.velocity.y < 0.5f)
+                PlayerBody.velocity = new Vector3(vel.x, 0, vel.z);
+            else if (PlayerBody.velocity.y > 0)
+                PlayerBody.velocity = new Vector3(vel.x, vel.y / 2, vel.z);
         }
     }
 
@@ -263,7 +282,8 @@ public class NewCharController : MonoBehaviour
 
 
     //Floor detection
-    private bool cancellingGrounded; //For cancelling OnGround state when you jump
+    private bool cancellingOnGround; //For cancelling OnGround state when you jump
+    private bool cancellingOnWall; //For cancelling OnWall state when you jump
 
     private void OnCollisionStay(Collision other)
     {
@@ -280,25 +300,73 @@ public class NewCharController : MonoBehaviour
                 if (Vector3.Angle(Vector3.up, c.normal) < MaxSlopeAngle)
                 {
                     OnGround = true;
-                    cancellingGrounded = false;
                     normalVector = c.normal;
-                    CancelInvoke(nameof(StopGrounded));
+
+                    //Clears referenced wall
+                    LastWallTouched = null;
+                    LastWallJumped = null;
+
+
+                    cancellingOnGround = false;
+                    CancelInvoke(nameof(StopOnGround));
+                }
+                //If angle of surface normal is between 89 and 91, then the surface is considered "Wall"
+                else if (Vector3.Angle(Vector3.up, c.normal) > 89 && Vector3.Angle(Vector3.up, c.normal) < 91)
+                {
+                    OnWall = true;
+                    Jumping = false;
+                    normalVector = Vector3.Normalize(c.normal * 1.5f + Vector3.up);
+
+                    //Updates referenced wall to be the GameObject you're touching (MAY CAUSE PROBLEMS IN CORNERS?)
+                    LastWallTouched = c.otherCollider.gameObject;
+
+                    cancellingOnWall = false;
+                    CancelInvoke(nameof(StopOnWall));
                 }
             }    
         }
 
         //Invoke ground/wall cancel, since we can't check normals with CollisionExit
         float delay = 3f;
-        if (!cancellingGrounded)
+        if (!cancellingOnGround)
         {
-            cancellingGrounded = true;
-            Invoke(nameof(StopGrounded), Time.deltaTime * delay);
+            cancellingOnGround = true;
+            Invoke(nameof(StopOnGround), Time.deltaTime * delay);
+        }
+        if (!cancellingOnWall)
+        {
+            cancellingOnWall = true;
+            Invoke(nameof(StopOnWall), Time.deltaTime * delay);
+        }
+
+        //Make OnWall and OnGround mutually exclusive
+        if (OnGround && OnWall)
+        {
+            OnWall = false;
+
+            //Clears referenced wall
+            LastWallTouched = null;
+            LastWallJumped = null;
         }
     }
 
-    private void StopGrounded()
+    private void StopOnGround()
     {
         OnGround = false;
+    }
+    private void StopOnWall()
+    {
+        OnWall = false;
+    }
+
+    private void Deathplane()
+    {
+        //If player falls below y=-10 bring them back to origin
+        if (transform.position.y <= -10)
+        {
+            transform.position = Vector3.zero;
+            Debug.Log("You fell lol");
+        }
     }
 
 }
