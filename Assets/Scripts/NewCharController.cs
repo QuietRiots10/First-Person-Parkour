@@ -17,9 +17,9 @@ public class NewCharController : MonoBehaviour
 
     //Movement
     private Vector2 InputVector = Vector2.zero;
-    [Tooltip("How quickly the player moves (Default = 4500)")]
+    [Tooltip("How quickly the player moves (Default = 1750)")]
     public float moveSpeed;
-    [Tooltip("Maximum speed of player, factoring in sliding and stuff (Default = 20)")]
+    [Tooltip("Maximum speed of player, factoring in sliding and stuff (Default = 15)")]
     public float maxSpeed;
     [Tooltip("LayerMask for ground objects")]
     public LayerMask WhatIsGround;
@@ -34,7 +34,7 @@ public class NewCharController : MonoBehaviour
     //Crouch & Slide
     private Vector3 crouchScale = new Vector3(1, 0.5f, 1);
     private Vector3 playerScale;
-    [Tooltip("Force added when a slide is started (Default = 400)")]
+    [Tooltip("Force added when a slide is started (Default = 600)")]
     public float SlideForce;
     [Tooltip("Controls how quickly speed is lost while sliding (Default = 0.2)")]
     public float SlideSlowdown;
@@ -42,8 +42,10 @@ public class NewCharController : MonoBehaviour
     //Jumping
     private bool ReadyToJump = true;
     private float JumpCooldown = 0.25f;
-    [Tooltip("Controls how high the player jumps (Default = 550)")]
+    [Tooltip("Controls how high the player jumps (Default = 300)")]
     public float JumpForce;
+    [Tooltip("Additional gravity applied to the player (Default = 35)")]
+    public float PlayerGravity;
 
     //Sliding
     private Vector3 normalVector = Vector3.up;
@@ -51,7 +53,13 @@ public class NewCharController : MonoBehaviour
     //Wallrunning
     public GameObject LastWallTouched; //Contains the last wall touched (MAY CAUSE PROBLEMS IN CORNERS?)
     public GameObject LastWallJumped; //Contains the last wall jumped off of
-    private bool ReadyToWallJump;
+    private bool ReadyToWallJump; //Whether the player can walljump
+    private bool ReadyToWallrun; //Whether the player can begin a wallrun (and thus recieve a boost)
+    [Tooltip("Upwards force applied while wallrunning (Default = 20)")]
+    public float WallrunUpForce;
+    [Tooltip("Upwards force applied while wallrunning (Default = 80)")]
+    public float WallrunBoostForce;
+    
 
     void Start()
     {
@@ -64,6 +72,7 @@ public class NewCharController : MonoBehaviour
     private void FixedUpdate()
     {
         Movement();
+        Wallrun();
         Deathplane();
     }
    
@@ -105,7 +114,7 @@ public class NewCharController : MonoBehaviour
         y = InputVector.y;
 
         //Extra gravity just for the player
-        PlayerBody.AddForce(Vector3.down * Time.deltaTime * 10);
+        PlayerBody.AddForce(Vector3.down * Time.deltaTime * PlayerGravity);
 
         //Find actual velocity relative to where player is looking
         Vector2 mag = FindVelRelativeToLook();
@@ -199,8 +208,8 @@ public class NewCharController : MonoBehaviour
         //Wall jumps
         else if (OnWall && (LastWallTouched !=  LastWallJumped))
         {
-            Debug.Log("Wall Jump!");
             LastWallJumped = LastWallTouched;
+            ReadyToWallrun = true;
 
             //Add jump forces
             PlayerBody.AddForce(Vector2.up * JumpForce * 1.8f);
@@ -212,6 +221,32 @@ public class NewCharController : MonoBehaviour
                 PlayerBody.velocity = new Vector3(vel.x, 0, vel.z);
             else if (PlayerBody.velocity.y > 0)
                 PlayerBody.velocity = new Vector3(vel.x, vel.y / 2, vel.z);
+        }
+    }
+
+    private void Wallrun()
+    {
+        Vector3 vel = PlayerBody.velocity;
+
+        if (OnWall)
+        {
+            //If ready to wallrun and look angle with wall is under 45 degrees, then add sideways force
+            if (ReadyToWallrun && (LastWallTouched != LastWallJumped) && (Vector3.Angle(-normalVector, LookDir.transform.forward)) > 45)
+            {
+                ReadyToWallrun = false;
+
+                //Dampen y velocity (upwards velocity is mantained much more than downwards velocity)
+                if (PlayerBody.velocity.y < 0)
+                    PlayerBody.velocity = new Vector3(vel.x, vel.y * 0.1f, vel.z);
+                else if (PlayerBody.velocity.y > 0)
+                    PlayerBody.velocity = new Vector3(vel.x, vel.y * 0.75f, vel.z);
+
+                //Add forward velocity
+                PlayerBody.AddForce(Vector3.Normalize(new Vector3(vel.x, 0, vel.z)) * Time.deltaTime * Mathf.Sqrt(vel.magnitude) * WallrunBoostForce * (1 / new Vector3(vel.x, 0, vel.z).magnitude), ForceMode.Impulse);
+            }
+            
+            //Applies a force into the wall and upwards
+            if (LastWallTouched != LastWallJumped) PlayerBody.AddForce(Vector3.Normalize((-0.2f * normalVector) + Vector3.up) * WallrunUpForce);
         }
     }
 
@@ -300,22 +335,23 @@ public class NewCharController : MonoBehaviour
                 if (Vector3.Angle(Vector3.up, c.normal) < MaxSlopeAngle)
                 {
                     OnGround = true;
+                    ReadyToWallrun = true;
                     normalVector = c.normal;
 
                     //Clears referenced wall
                     LastWallTouched = null;
                     LastWallJumped = null;
 
-
                     cancellingOnGround = false;
                     CancelInvoke(nameof(StopOnGround));
                 }
+
                 //If angle of surface normal is between 89 and 91, then the surface is considered "Wall"
                 else if (Vector3.Angle(Vector3.up, c.normal) > 89 && Vector3.Angle(Vector3.up, c.normal) < 91)
                 {
                     OnWall = true;
                     Jumping = false;
-                    normalVector = Vector3.Normalize(c.normal * 1.5f + Vector3.up);
+                    normalVector = c.normal;
 
                     //Updates referenced wall to be the GameObject you're touching (MAY CAUSE PROBLEMS IN CORNERS?)
                     LastWallTouched = c.otherCollider.gameObject;
